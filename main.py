@@ -1,11 +1,22 @@
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime
 import os
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+from dotenv import load_dotenv
 
-sample_size = 1000
-similarity_threshold = 0.8
+load_dotenv()
+
+alm_file = os.getenv('ALM_FILE_PATH')
+danmurphys_file = os.getenv('DANMURPHYS_FILE_PATH')
+qdrant_host = os.getenv('QDRANT_HOST')
+qdrant_port = int(os.getenv('QDRANT_PORT'))
+alm_collection_name = os.getenv('ALM_COLLECTION_NAME')
+dan_murphys_collection_name = os.getenv('DANMURPHYS_COLLECTION_NAME')
+sample_size = int(os.getenv('SAMPLE_SIZE'))
+similarity_threshold = float(os.getenv('SIMILARITY_THRESHOLD'))
+top_k_results = int(os.getenv('TOP_K_RESULTS'))
 
 # Function to concatenate multiple fields into a single description
 def concatenate_fields(row, fields):
@@ -38,48 +49,81 @@ def main():
     alm_data = pd.read_csv('products/20241101_ALM_PRODUCTS.csv', delimiter='|')
     danmurphys_data = pd.read_csv('products/20241101_DANMURPHYS_PRODUCTS.csv', delimiter='|')
 
-    alm_sample = alm_data.sample(n=min(sample_size, len(alm_data)), random_state=42).reset_index(drop=True)
-    danmurphys_sample = danmurphys_data.sample(n=min(sample_size, len(danmurphys_data)), random_state=42).reset_index(drop=True)
+    # Use whole datasets if the sample_size is set to zero
+    if sample_size > 0:
+        alm_data = alm_data.sample(n=min(sample_size, len(alm_data)), random_state=42).reset_index(drop=True)
+        danmurphys_data = danmurphys_data.sample(n=min(sample_size, len(danmurphys_data)), random_state=42).reset_index(drop=True)
 
     # Define fields to concatenate for embedding
     alm_fields = ['ITEM_DESCRIPTION', 'ITEM_BRAND', 'ITEM_SIZE', 'RETAIL_UNIT_LUC_PACK', 'CATEGORY', 'ALCOHOL_STRENGTH_PERC']
     danmurphys_fields = ['PRODUCT_NAME', 'BRAND', 'PACKAGE_SIZE', 'PACK_FORMAT', 'CATEGORY', 'ALCOHOL_VOLUME']
 
     # Create concatenated descriptions
-    alm_sample['full_description'] = alm_sample.apply(lambda row: concatenate_fields(row, alm_fields), axis=1)
-    danmurphys_sample['full_description'] = danmurphys_sample.apply(lambda row: concatenate_fields(row, danmurphys_fields), axis=1)
+    alm_data['full_description'] = alm_data.apply(lambda row: concatenate_fields(row, alm_fields), axis=1)
+    danmurphys_data['full_description'] = danmurphys_data.apply(lambda row: concatenate_fields(row, danmurphys_fields), axis=1)
 
     # Initialize the embedding model
     model = SentenceTransformer('all-MiniLM-L6-v2')
 
     # Generate embeddings
     print("Generating embeddings for ALM products...")
-    alm_embeddings = model.encode(alm_sample['full_description'].tolist(), convert_to_tensor=False)
+    alm_embeddings = model.encode(alm_data['full_description'].tolist(), convert_to_tensor=False)
     
     print("Generating embeddings for Dan Murphy's products...")
-    danmurphys_embeddings = model.encode(danmurphys_sample['full_description'].tolist(), convert_to_tensor=False)
+    danmurphys_embeddings = model.encode(danmurphys_data['full_description'].tolist(), convert_to_tensor=False)
 
-    # Compute cosine similarity
-    print("Computing cosine similarity...")
-    cosine_similarities = cosine_similarity(alm_embeddings, danmurphys_embeddings)
+    # Initialize Qdrant client
+    client = QdrantClient(host=qdrant_host, port=qdrant_port)
 
-    # Find matches above the threshold
+    # Create collections in Qdrant for each dataset
+    if not client.collection_exists(alm_collection_name):
+        client.create_collection(
+            collection_name=alm_collection_name,
+            vectors_config=VectorParams(size=100, distance=Distance.COSINE),
+    )
+
+    if not client.collection_exists(dan_murphys_collection_name):
+        client.create_collection(
+            collection_name=dan_murphys_collection_name,
+            vectors_config=VectorParams(size=100, distance=Distance.COSINE),
+    )
+
+    # Upload embeddings to Qdrant
+    print("Uploading ALM embeddings to Qdrant...")
+    client.upload_collection(
+        collection_name=alm_collection_name,
+        vectors=alm_embeddings,
+        payload=[{"full_description": desc} for desc in alm_data['full_description'].tolist()],
+        ids=[i for i in range(len(alm_embeddings))]
+    )
+
+    print("Uploading Dan Murphy's embeddings to Qdrant...")
+    client.upload_collection(
+        collection_name=dan_murphys_collection_name,
+        vectors=danmurphys_embeddings,
+        payload=[{"full_description": desc} for desc in danmurphys_data['full_description'].tolist()],
+        ids=[i for i in range(len(danmurphys_embeddings))]
+    )
+
+    # Perform matching: Search for similar products
     matches = []
-    for i, alm_similarities in enumerate(cosine_similarities):
-        match_indices = [j for j, score in enumerate(alm_similarities) if score >= similarity_threshold]
-        for j in match_indices:
-            matches.append({
-                'ALM Product': alm_sample.iloc[i]['ITEM_DESCRIPTION'],
-                'ALM Brand': alm_sample.iloc[i]['ITEM_BRAND'],
-                'ALM Pack Size': alm_sample.iloc[i]['ITEM_SIZE'],
-                'ALM Pack Format': alm_sample.iloc[i]['RETAIL_UNIT_LUC_PACK'],
-                'Dan Murphy\'s Product': danmurphys_sample.iloc[j]['PRODUCT_NAME'],
-                'Dan Murphy\'s Brand': danmurphys_sample.iloc[j]['BRAND'],
-                'Dan Murphy\'s Pack Size': danmurphys_sample.iloc[j]['PACKAGE_SIZE'],
-                'Dan Murphy\'s Pack Format': danmurphys_sample.iloc[j]['PACK_FORMAT'],
-                'Dan Murphy\'s Price': danmurphys_sample.iloc[j]['PRICE'],
-                'Similarity Score': alm_similarities[j]
-            })
+    for i, alm_embedding in enumerate(alm_embeddings):
+        search_results = client.search(
+            collection_name=dan_murphys_collection_name,
+            query_vector=alm_embedding,
+            limit=top_k_results
+        )
+
+        for result in search_results:
+            if result.score >= similarity_threshold:
+                matches.append({
+                    'ALM Product': alm_data.iloc[i]['ITEM_DESCRIPTION'],
+                    'ALM Brand': alm_data.iloc[i]['ITEM_BRAND'],
+                    'ALM Pack Size': alm_data.iloc[i]['ITEM_SIZE'],
+                    'ALM Pack Format': alm_data.iloc[i]['RETAIL_UNIT_LUC_PACK'],
+                    "Dan Murphy's Product": result.payload['full_description'],
+                    'Similarity Score': result.score
+                })
 
     save_matching_result(matches)
 
