@@ -1,12 +1,13 @@
+import os
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
-import os
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 from dotenv import load_dotenv
+from preprocess import preprocess_product_data
 
-load_dotenv()
+load_dotenv(override=True)
 
 alm_file = os.getenv('ALM_FILE_PATH')
 danmurphys_file = os.getenv('DANMURPHYS_FILE_PATH')
@@ -46,13 +47,18 @@ def save_matching_result(matches):
 
 def main():
     # Load data
-    alm_data = pd.read_csv('products/20241101_ALM_PRODUCTS.csv', delimiter='|')
-    danmurphys_data = pd.read_csv('products/20241101_DANMURPHYS_PRODUCTS.csv', delimiter='|')
+    alm_data = pd.read_csv('products/20241101_ALM_PRODUCTS.csv', delimiter='|', low_memory=False)
+    danmurphys_data = pd.read_csv('products/20241101_DANMURPHYS_PRODUCTS.csv', delimiter='|', low_memory=False)
 
     # Use whole datasets if the sample_size is set to zero
     if sample_size > 0:
         alm_data = alm_data.sample(n=min(sample_size, len(alm_data)), random_state=42).reset_index(drop=True)
         danmurphys_data = danmurphys_data.sample(n=min(sample_size, len(danmurphys_data)), random_state=42).reset_index(drop=True)
+
+    # Preprocess product data 
+    print("Preprocessing datas...")
+    alm_data = preprocess_product_data(alm_data, 'ALM')
+    danmurphys_data = preprocess_product_data(danmurphys_data, 'DANMURPHYS')
 
     # Define fields to concatenate for embedding
     alm_fields = ['ITEM_DESCRIPTION', 'ITEM_BRAND', 'ITEM_SIZE', 'RETAIL_UNIT_LUC_PACK', 'CATEGORY', 'ALCOHOL_STRENGTH_PERC']
