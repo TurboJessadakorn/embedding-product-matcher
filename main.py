@@ -99,7 +99,7 @@ def main():
     client.upload_collection(
         collection_name=alm_collection_name,
         vectors=alm_embeddings,
-        payload=[{"full_description": desc} for desc in alm_data['full_description'].tolist()],
+        payload=[{"full_description": desc, "ITEM_NUMBER": str(item)} for desc, item in zip(alm_data['full_description'], alm_data['ITEM_NUMBER'])],
         ids=[i for i in range(len(alm_embeddings))]
     )
 
@@ -107,7 +107,7 @@ def main():
     client.upload_collection(
         collection_name=dan_murphys_collection_name,
         vectors=danmurphys_embeddings,
-        payload=[{"full_description": desc} for desc in danmurphys_data['full_description'].tolist()],
+        payload=[{"full_description": desc, "STOCKCODE": str(item)} for desc, item in zip(danmurphys_data['full_description'], danmurphys_data['STOCKCODE'])],
         ids=[i for i in range(len(danmurphys_embeddings))]
     )
 
@@ -127,7 +127,10 @@ def main():
                     'ALM Brand': alm_data.iloc[i]['ITEM_BRAND'],
                     'ALM Pack Size': alm_data.iloc[i]['ITEM_SIZE'],
                     'ALM Pack Format': alm_data.iloc[i]['RETAIL_UNIT_LUC_PACK'],
+                    'ALM ID': alm_data.iloc[i]['ITEM_NUMBER'],
                     "Dan Murphy's Product": result.payload['full_description'],
+                    'Dan Murphy\'s Price': danmurphys_data.loc[result.id, 'PRICE'],
+                    'Dan Murphy\'s ID': danmurphys_data.loc[result.id, 'STOCKCODE'],
                     'Similarity Score': result.score
                 })
 
