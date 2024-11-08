@@ -79,13 +79,13 @@ def main():
     if not client.collection_exists(alm_collection_name):
         client.create_collection(
             collection_name=alm_collection_name,
-            vectors_config=VectorParams(size=100, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
     )
 
     if not client.collection_exists(dan_murphys_collection_name):
         client.create_collection(
             collection_name=dan_murphys_collection_name,
-            vectors_config=VectorParams(size=100, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
     )
 
     # Upload embeddings to Qdrant
